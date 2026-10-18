@@ -1,0 +1,185 @@
+{
+  "id": "usage",
+  "kind": "source",
+  "version": "1.0.0",
+  "hub_api": 1,
+  "name": {
+    "zh": "AI 用量",
+    "en": "AI usage"
+  },
+  "description": {
+    "zh": "Cursor / Grok / OpenCode Go / Antigravity / Devin 的已用百分比；凭证文件挂到插件数据目录，API key 放 hub 密钥库",
+    "en": "Percent used across Cursor, Grok, OpenCode Go, Antigravity and Devin; files from the plugin data dir, keys from the hub"
+  },
+  "author": "neatstudio",
+  "homepage": "https://github.com/neatstudio/glance-plugin-usage",
+  "license": "MIT",
+  "entry": "plugin.py",
+  "permissions": [
+    "network",
+    "filesystem:data",
+    "secrets:xai",
+    "secrets:opencode",
+    "secrets:opencode_go",
+    "secrets:devin",
+    "secrets:devin_seat_url",
+    "secrets:agy_client_id",
+    "secrets:agy_client_secret"
+  ],
+  "settings": {
+    "type": "object",
+    "properties": {
+      "refresh_min": {
+        "type": "integer",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 120,
+        "title": "刷新间隔（分钟）"
+      },
+      "providers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "CURSOR",
+          "GROK",
+          "OC.GO",
+          "AGY",
+          "DEVIN"
+        ],
+        "title": "显示哪些（按顺序）"
+      }
+    }
+  },
+  "provides": {
+    "entities": [
+      {
+        "id": "rows",
+        "name": {
+          "zh": "用量表"
+        },
+        "fields": {
+          "rows": {
+            "type": "table",
+            "columns": [
+              "name",
+              "pct_5h",
+              "pct_week",
+              "tag_5h",
+              "tag_week",
+              "note"
+            ]
+          },
+          "lines": {
+            "type": "list"
+          },
+          "names": {
+            "type": "list"
+          }
+        },
+        "stale_after_s": 1800
+      },
+      {
+        "id": "cursor",
+        "name": {
+          "zh": "Cursor"
+        },
+        "fields": {
+          "pct_5h": {
+            "type": "number",
+            "unit": "%"
+          },
+          "pct_week": {
+            "type": "number",
+            "unit": "%"
+          },
+          "line": {
+            "type": "text"
+          }
+        },
+        "stale_after_s": 1800
+      },
+      {
+        "id": "grok",
+        "name": {
+          "zh": "Grok"
+        },
+        "fields": {
+          "pct_5h": {
+            "type": "number",
+            "unit": "%"
+          },
+          "pct_week": {
+            "type": "number",
+            "unit": "%"
+          },
+          "line": {
+            "type": "text"
+          }
+        },
+        "stale_after_s": 1800
+      },
+      {
+        "id": "ocgo",
+        "name": {
+          "zh": "OpenCode Go"
+        },
+        "fields": {
+          "pct_5h": {
+            "type": "number",
+            "unit": "%"
+          },
+          "pct_week": {
+            "type": "number",
+            "unit": "%"
+          },
+          "line": {
+            "type": "text"
+          }
+        },
+        "stale_after_s": 1800
+      },
+      {
+        "id": "agy",
+        "name": {
+          "zh": "Antigravity"
+        },
+        "fields": {
+          "pct_5h": {
+            "type": "number",
+            "unit": "%"
+          },
+          "pct_week": {
+            "type": "number",
+            "unit": "%"
+          },
+          "line": {
+            "type": "text"
+          }
+        },
+        "stale_after_s": 1800
+      },
+      {
+        "id": "devin",
+        "name": {
+          "zh": "Devin"
+        },
+        "fields": {
+          "pct_5h": {
+            "type": "number",
+            "unit": "%"
+          },
+          "pct_week": {
+            "type": "number",
+            "unit": "%"
+          },
+          "line": {
+            "type": "text"
+          }
+        },
+        "stale_after_s": 1800
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+name: check plugin
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema pillow pytest
+      - name: fetch glance checker
+        run: |
+          mkdir -p .glance
+          curl -sSLo .glance/check_plugin.py https://raw.githubusercontent.com/neatstudio/glance/main/conformance/check_plugin.py
+          curl -sSLo .glance/plugin.schema.json https://raw.githubusercontent.com/neatstudio/glance/main/schemas/plugin.schema.json
+      - run: python .glance/check_plugin.py . --schema .glance/plugin.schema.json
+      - run: pytest -q
