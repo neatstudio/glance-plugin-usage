@@ -16,7 +16,7 @@ from . import providers
 ENTITY_FOR = {"CURSOR": "cursor", "GROK": "grok", "OC.GO": "ocgo", "AGY": "agy", "DEVIN": "devin"}
 # Each vendor gets this long; the hub's refresh budget is 30 s in total and
 # the five run concurrently, so a slow vendor only blanks its own row.
-PER_PROVIDER_S = 12.0
+PER_PROVIDER_S = 27.0
 FETCHERS = {
     "CURSOR": lambda: providers._cursor(),
     "GROK": lambda: providers._grok(),
