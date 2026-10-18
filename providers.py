@@ -11,11 +11,11 @@ two bars are first-party Auto (`autoPercentUsed`) and third-party API
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import sqlite3
-import tempfile
 import tomllib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -120,32 +120,28 @@ async def fetch_all() -> list[dict]:
     ]
 
 
-def _read_cursor_token() -> str | None:
-    if not CURSOR_DB.exists():
-        return None
-    tmp = None
+
+def _sqlite_rows(path: Path, sql: str) -> list:
+    """Query a possibly huge app database in place: read-only, immutable, no copy."""
+    if not path.exists():
+        return []
+    con = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True, timeout=5)
     try:
-        with tempfile.NamedTemporaryFile(delete=False) as handle:
-            tmp = Path(handle.name)
-        tmp.write_bytes(CURSOR_DB.read_bytes())
-        con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
-        try:
-            row = con.execute(
-                "SELECT value FROM ItemTable WHERE key='cursorAuth/accessToken'"
-            ).fetchone()
-        finally:
-            con.close()
-        return str(row[0]) if row and row[0] else None
+        return con.execute(sql).fetchall()
+    finally:
+        con.close()
+
+def _read_cursor_token() -> str | None:
+    try:
+        rows = _sqlite_rows(CURSOR_DB, "SELECT value FROM ItemTable WHERE key='cursorAuth/accessToken'")
     except Exception:
         logger.warning("cursor db unreadable")
         return None
-    finally:
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
+    return str(rows[0][0]) if rows and rows[0][0] else None
 
 
 async def _cursor() -> dict:
-    token = _read_cursor_token()
+    token = await asyncio.to_thread(_read_cursor_token)
     if not token:
         return _row("CURSOR")
     headers = {
@@ -642,19 +638,6 @@ async def _agy() -> dict:
     return _row("AGY", pct_5h=five, pct_week=week)
 
 
-def _sqlite_copy(path: Path) -> Path | None:
-    if not path.exists():
-        return None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False) as handle:
-            tmp = Path(handle.name)
-        tmp.write_bytes(path.read_bytes())
-        return tmp
-    except Exception:
-        logger.warning("sqlite copy failed %s", path)
-        return None
-
-
 def _devin_remaining_to_used(value: object) -> float | None:
     if isinstance(value, str):
         value = value.strip()
@@ -743,22 +726,11 @@ async def _devin_live() -> tuple[float | None, float | None]:
 
 
 def _devin_from_cache() -> tuple[float | None, float | None]:
-    tmp = _sqlite_copy(DEVIN_DB)
-    if tmp is None:
-        return None, None
     try:
-        con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
-        try:
-            rows = con.execute(
-                "SELECT key, value FROM ItemTable WHERE key LIKE 'windsurf.reactSettings.cachedPlanInfoData:%'"
-            ).fetchall()
-        finally:
-            con.close()
+        rows = _sqlite_rows(DEVIN_DB, "SELECT key, value FROM ItemTable WHERE key LIKE 'windsurf.reactSettings.cachedPlanInfoData:%'")
     except Exception:
         logger.warning("devin db unreadable")
         return None, None
-    finally:
-        tmp.unlink(missing_ok=True)
     best = None
     for _key, raw in rows:
         try:
@@ -781,5 +753,5 @@ def _devin_from_cache() -> tuple[float | None, float | None]:
 async def _devin() -> dict:
     five, week = await _devin_live()
     if five is None and week is None:
-        five, week = _devin_from_cache()
+        five, week = await asyncio.to_thread(_devin_from_cache)
     return _row("DEVIN", pct_5h=five, pct_week=week)
