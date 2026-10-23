@@ -1,15 +1,15 @@
 {
   "id": "usage",
   "kind": "source",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "hub_api": 1,
   "name": {
     "zh": "AI 用量",
     "en": "AI usage"
   },
   "description": {
-    "zh": "Cursor / Grok / OpenCode Go / Antigravity / Devin 的已用百分比；凭证文件挂到插件数据目录，API key 放 hub 密钥库",
-    "en": "Percent used across Cursor, Grok, OpenCode Go, Antigravity and Devin; files from the plugin data dir, keys from the hub"
+    "zh": "Cursor / Open Design / OpenCode Go / Antigravity / Devin 的已用百分比；凭证文件挂到插件数据目录，API key 放 hub 密钥库",
+    "en": "Percent used across Cursor, Open Design, OpenCode Go, Antigravity and Devin"
   },
   "author": "neatstudio",
   "homepage": "https://github.com/neatstudio/glance-plugin-usage",
@@ -18,7 +18,6 @@
   "permissions": [
     "network",
     "filesystem:data",
-    "secrets:xai",
     "secrets:opencode",
     "secrets:opencode_go",
     "secrets:devin",
@@ -41,13 +40,7 @@
         "items": {
           "type": "string"
         },
-        "default": [
-          "CURSOR",
-          "GROK",
-          "OC.GO",
-          "AGY",
-          "DEVIN"
-        ],
+        "default": ["CURSOR", "DESIGN", "OC.GO", "AGY", "DEVIN"],
         "title": "显示哪些（按顺序）"
       }
     }
@@ -101,9 +94,9 @@
         "stale_after_s": 1800
       },
       {
-        "id": "grok",
+        "id": "opendesign",
         "name": {
-          "zh": "Grok"
+          "zh": "Open Design"
         },
         "fields": {
           "pct_5h": {

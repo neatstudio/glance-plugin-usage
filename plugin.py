@@ -13,13 +13,13 @@ from glance.plugin import SourcePlugin
 
 from . import providers
 
-ENTITY_FOR = {"CURSOR": "cursor", "GROK": "grok", "OC.GO": "ocgo", "AGY": "agy", "DEVIN": "devin"}
+ENTITY_FOR = {"CURSOR": "cursor", "DESIGN": "opendesign", "OC.GO": "ocgo", "AGY": "agy", "DEVIN": "devin"}
 # Each vendor gets this long; the hub's refresh budget is 30 s in total and
 # the five run concurrently, so a slow vendor only blanks its own row.
 PER_PROVIDER_S = 27.0
 FETCHERS = {
     "CURSOR": lambda: providers._cursor(),
-    "GROK": lambda: providers._grok(),
+    "DESIGN": lambda: providers._opendesign(),
     "OC.GO": lambda: providers._opencode_go(),
     "AGY": lambda: providers._agy(),
     "DEVIN": lambda: providers._devin(),

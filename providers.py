@@ -1,4 +1,4 @@
-"""Best-effort usage lines for Cursor / Grok / OpenCode Go / AGY / Devin.
+"""Best-effort usage lines for Cursor / Open Design / OpenCode Go / AGY / Devin.
 
 Every number on the board is percent USED (higher = more consumed).
 Vendors that only publish remaining (AGY remainingFraction, Devin remaining
@@ -14,10 +14,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import sqlite3
 import tomllib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -28,7 +27,7 @@ logger = logging.getLogger("usage")
 # from the environment. Files live under the plugin's data dir (the operator
 # mounts them there), keys come from the hub's secret store.
 CURSOR_DB = Path("/nonexistent/cursor-state.vscdb")
-GROK_AUTH = Path("/nonexistent/grok/auth.json")
+AMR_CONFIG = Path("/nonexistent/amr-config.json")
 OPENCODE_AUTH = Path("/nonexistent/opencode-auth.json")
 OPENCODE_CONFIG = Path("/nonexistent/opencode.json")
 AGY_ACCOUNTS = Path("/nonexistent/agy-accounts.json")
@@ -42,10 +41,10 @@ KEYS: dict[str, str] = {}
 
 def configure(secrets_dir: Path, cache_dir: Path, keys: dict[str, str]) -> None:
     """secrets_dir: mounted credential files; cache_dir: writable; keys: hub secrets."""
-    global CURSOR_DB, GROK_AUTH, OPENCODE_AUTH, OPENCODE_CONFIG, AGY_ACCOUNTS, DEVIN_DB, DEVIN_CREDENTIALS
+    global CURSOR_DB, AMR_CONFIG, OPENCODE_AUTH, OPENCODE_CONFIG, AGY_ACCOUNTS, DEVIN_DB, DEVIN_CREDENTIALS
     global AGY_USAGE_JSON, AGY_CLIENT_ID, AGY_CLIENT_SECRET
     CURSOR_DB = secrets_dir / "cursor-state.vscdb"
-    GROK_AUTH = secrets_dir / "grok" / "auth.json"
+    AMR_CONFIG = secrets_dir / "amr-config.json"
     OPENCODE_AUTH = secrets_dir / "opencode-auth.json"
     OPENCODE_CONFIG = secrets_dir / "opencode.json"
     AGY_ACCOUNTS = secrets_dir / "agy-accounts.json"
@@ -90,15 +89,15 @@ def _row(
 
 
 async def fetch_all() -> list[dict]:
-    cursor = grok = ocgo = agy = devin = None
+    cursor = design = ocgo = agy = devin = None
     try:
         cursor = await _cursor()
     except Exception:
         logger.exception("cursor usage")
     try:
-        grok = await _grok()
+        design = await _opendesign()
     except Exception:
-        logger.exception("grok usage")
+        logger.exception("opendesign usage")
     try:
         ocgo = await _opencode_go()
     except Exception:
@@ -113,7 +112,7 @@ async def fetch_all() -> list[dict]:
         logger.exception("devin usage")
     return [
         cursor or _row("CURSOR"),
-        grok or _row("GROK"),
+        design or _row("DESIGN"),
         ocgo or _row("OC.GO"),
         agy or _row("AGY"),
         devin or _row("DEVIN"),
@@ -168,191 +167,132 @@ async def _cursor() -> dict:
     return _row("CURSOR", pct_5h=five, pct_week=week, tag_5h="1方", tag_week="3方")
 
 
-def _read_grok_auth() -> dict | None:
-    if not GROK_AUTH.exists():
+def _credit_number(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
         return None
-    try:
-        auth = json.loads(GROK_AUTH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        logger.warning("grok auth unreadable")
-        return None
-    return auth if isinstance(auth, dict) else None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
 
 
-def _grok_account(auth: dict) -> tuple[str, dict] | None:
-    """Return the OIDC session that can be refreshed, else any session with a key."""
-    oidc: tuple[str, dict] | None = None
-    keyed: tuple[str, dict] | None = None
-    for name, value in auth.items():
-        if not isinstance(value, dict):
+def _opendesign_used_pct(window: dict) -> float | None:
+    used = _credit_number(window.get("usedCredits"))
+    limit = _credit_number(window.get("limitCredits"))
+    if used is None or limit is None or limit <= 0:
+        return None
+    return 100.0 * used / limit
+
+
+def _opendesign_windows(payload: dict) -> tuple[float | None, float | None]:
+    """Map preflight windows onto the 5h bar and the week bar.
+
+    OpenDesign identifies a window by durationSeconds (18000 = 5h, 604800 = 7d).
+    Credits arrive as strings. The board stores percent used.
+    """
+    plan = payload.get("codingPlan") if isinstance(payload.get("codingPlan"), dict) else {}
+    windows = plan.get("windows") if isinstance(plan.get("windows"), list) else []
+    five = None
+    week = None
+    for window in windows:
+        if not isinstance(window, dict):
             continue
-        if value.get("key") and keyed is None:
-            keyed = (str(name), value)
-        if value.get("auth_mode") == "oidc" and value.get("refresh_token"):
-            oidc = (str(name), value)
-            break
-    return oidc or keyed
+        duration = _credit_number(window.get("durationSeconds"))
+        used = _opendesign_used_pct(window)
+        if duration is None or used is None:
+            continue
+        if duration <= 5 * 3600 * 1.3:
+            five = used if five is None else max(five, used)
+        elif duration <= 7 * 24 * 3600 * 1.15:
+            week = used if week is None else max(week, used)
+    return five, week
 
 
-def _grok_expires_at(account: dict) -> datetime | None:
-    raw = account.get("expires_at")
-    if not isinstance(raw, str) or not raw.strip():
+def _read_amr_profile() -> tuple[str, str] | None:
+    """Return (api base, control key) from the OpenDesign login file."""
+    if not AMR_CONFIG.exists():
         return None
-    text = raw.strip().replace("Z", "+00:00")
     try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
+        data = json.loads(AMR_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("opendesign config unreadable")
         return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _grok_token_fresh(account: dict, skew_seconds: int = 120) -> bool:
-    token = str(account.get("key") or "").strip()
-    if not token:
-        return False
-    expires_at = _grok_expires_at(account)
-    if expires_at is None:
-        return True
-    return expires_at > datetime.now(timezone.utc) + timedelta(seconds=skew_seconds)
-
-
-def _write_grok_auth(auth: dict) -> None:
-    """Atomically replace auth.json inside its directory so a file bind-mount is not pinned to a deleted inode."""
-    payload = json.dumps(auth, indent=2) + "\n"
-    temporary = GROK_AUTH.with_name(GROK_AUTH.name + ".tmp")
-    temporary.write_text(payload, encoding="utf-8")
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, GROK_AUTH)
-    os.chmod(GROK_AUTH, 0o600)
-
-
-async def _grok_refresh(
-    client: httpx.AsyncClient,
-    auth: dict,
-    account_key: str,
-    account: dict,
-) -> str | None:
-    """Exchange refresh_token for a new access token and store it next to the old session."""
-    refresh = str(account.get("refresh_token") or "").strip()
-    client_id = str(account.get("oidc_client_id") or "").strip()
-    issuer = str(account.get("oidc_issuer") or "https://auth.x.ai").rstrip("/")
-    if not refresh or not client_id:
-        logger.warning("grok refresh skipped: missing refresh token or client id")
+    profiles = data.get("profiles") if isinstance(data, dict) else None
+    if not isinstance(profiles, dict):
         return None
-    resp = await client.post(
-        f"{issuer}/oauth2/token",
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh,
-            "client_id": client_id,
-        },
-        headers={"Accept": "application/json"},
-    )
-    if resp.status_code != 200:
-        logger.warning("grok token refresh %s", resp.status_code)
+    profile = profiles.get("prod")
+    if not isinstance(profile, dict):
+        profile = next(
+            (item for item in profiles.values() if isinstance(item, dict) and item.get("controlKey")),
+            None,
+        )
+    if not isinstance(profile, dict):
         return None
-    body = resp.json() if resp.content else {}
-    if not isinstance(body, dict):
+    key = str(profile.get("controlKey") or "").strip()
+    if not key:
         return None
-    access = body.get("access_token")
-    if not isinstance(access, str) or not access.strip():
+    base = str(profile.get("apiUrl") or "https://amr-api.open-design.ai").rstrip("/")
+    return base, key
+
+
+def _opendesign_workspace_id(payload: dict) -> str | None:
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
         return None
-    account["key"] = access
-    rotated = body.get("refresh_token")
-    if isinstance(rotated, str) and rotated.strip():
-        account["refresh_token"] = rotated
-    expires_in = body.get("expires_in")
-    if isinstance(expires_in, (int, float)) and expires_in > 0:
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=float(expires_in))
-        account["expires_at"] = expires_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    auth[account_key] = account
-    try:
-        _write_grok_auth(auth)
-        logger.info("grok token refreshed")
-    except OSError:
-        logger.warning("grok token refreshed in memory; auth file was not updated")
-    return access
+    first = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        workspace_id = str(item.get("workspaceId") or "").strip()
+        if not workspace_id:
+            continue
+        if first is None:
+            first = workspace_id
+        if item.get("role") == "owner":
+            return workspace_id
+    return first
 
 
-def _grok_week_percent(data: dict) -> float | None:
-    cfg = data.get("config") or data
-    if not isinstance(cfg, dict):
-        return None
-    pct = cfg.get("creditUsagePercent")
-    if not isinstance(pct, (int, float)):
-        for product in cfg.get("productUsage") or []:
-            if isinstance(product, dict) and isinstance(product.get("usagePercent"), (int, float)):
-                pct = product["usagePercent"]
-                break
-    if not isinstance(pct, (int, float)):
-        return None
-    return float(pct)
-
-
-async def _grok_billing(client: httpx.AsyncClient, token: str) -> tuple[int, float | None]:
-    resp = await client.get(
-        "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    if resp.status_code != 200:
-        logger.warning("grok billing %s", resp.status_code)
-        return resp.status_code, None
-    data = resp.json() if resp.content else {}
-    if not isinstance(data, dict):
-        return resp.status_code, None
-    return resp.status_code, _grok_week_percent(data)
-
-
-def _grok_week_row(week: float | None) -> dict:
-    if week is None:
-        return _row("GROK")
-    # No separate 5h pool from this API — show weekly on both bars so the
-    # left cell is not a permanent "5h —" dead slot.
-    return _row("GROK", pct_5h=week, pct_week=week, tag_5h="周", tag_week="W")
-
-
-async def _grok_from_api_key() -> dict:
-    api_key = KEYS.get("xai", "").strip()
-    if not api_key:
-        return _row("GROK")
-    async with httpx.AsyncClient(timeout=12.0) as client:
+async def _opendesign() -> dict:
+    """OpenDesign plan usage. Uses the control key in the login file, not an inference key."""
+    found = _read_amr_profile()
+    if not found:
+        return _row("DESIGN")
+    base, key = found
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+        "User-Agent": "rlcd-usage/1.0",
+    }
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=False) as client:
+        listed = await client.get(f"{base}/api/v1/workspaces", headers=headers)
+        if listed.status_code != 200:
+            logger.warning("opendesign workspaces %s", listed.status_code)
+            return _row("DESIGN")
+        body = listed.json() if listed.content else {}
+        workspace_id = _opendesign_workspace_id(body if isinstance(body, dict) else {})
+        if not workspace_id:
+            return _row("DESIGN")
+        scoped = {**headers, "x-vela-workspace-id": workspace_id}
         resp = await client.get(
-            "https://api.x.ai/v1/api-key",
-            headers={"Authorization": f"Bearer {api_key}"},
+            f"{base}/api/v1/workspaces/{workspace_id}/billing/preflight",
+            headers=scoped,
         )
         if resp.status_code != 200:
-            return _row("GROK")
-        data = resp.json()
-    remaining = data.get("remaining_credits") or data.get("credits")
-    limit = data.get("monthly_limit") or data.get("limit")
-    if isinstance(remaining, (int, float)) and isinstance(limit, (int, float)) and limit:
-        week = 100.0 * (1.0 - remaining / limit)
-        return _row("GROK", pct_5h=week, pct_week=week, tag_5h="月", tag_week="W")
-    return _row("GROK")
-
-
-async def _grok() -> dict:
-    """Grok/xAI quota. Billing is weekly-only. Access tokens last ~6h; refresh them."""
-    auth = _read_grok_auth()
-    found = _grok_account(auth) if auth else None
-    if not auth or not found:
-        return await _grok_from_api_key()
-    account_key, account = found
-    async with httpx.AsyncClient(timeout=12.0) as client:
-        token = str(account.get("key") or "").strip()
-        if not _grok_token_fresh(account):
-            refreshed = await _grok_refresh(client, auth, account_key, account)
-            token = refreshed or token
-        if not token:
-            return await _grok_from_api_key()
-        status, week = await _grok_billing(client, token)
-        if status == 401:
-            refreshed = await _grok_refresh(client, auth, account_key, account)
-            if refreshed:
-                _status, week = await _grok_billing(client, refreshed)
-        return _grok_week_row(week)
+            logger.warning("opendesign preflight %s", resp.status_code)
+            return _row("DESIGN")
+        payload = resp.json() if resp.content else {}
+    if not isinstance(payload, dict):
+        return _row("DESIGN")
+    five, week = _opendesign_windows(payload)
+    return _row("DESIGN", pct_5h=five, pct_week=week)
 
 
 def _opencode_keys() -> list[str]:
