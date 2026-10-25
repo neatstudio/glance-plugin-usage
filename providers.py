@@ -161,7 +161,7 @@ async def _qoder() -> dict:
         return _row("QODER", tag_5h="套", tag_week="总")
     async with httpx.AsyncClient(timeout=12.0) as client:
         resp = await client.get(
-            "https://openapi.qoder.com.cn/api/v2/quota/usage",
+            "https://openapi.qoder.com.cn/api/v2/quota/usage",  # Qoder CN, not qoder.com
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         )
     if resp.status_code != 200:
@@ -200,13 +200,21 @@ def _trae_userinfo() -> dict | None:
     return info if isinstance(info, dict) else None
 
 
+def _trae_international_host(info: dict) -> str:
+    """International Trae only. api.trae.cn is the China app and is ignored."""
+    host = str(info.get("host") or "").strip().rstrip("/")
+    if host.startswith("https://") and "trae.ai" in host and "trae.cn" not in host:
+        return host
+    return "https://growsg-normal.trae.ai"
+
+
 async def _trae() -> dict:
-    """Trae Pro dollar pool. 基 is included usage, 奖 is the bonus pool."""
-    info = _trae_userinfo()
-    token = str((info or {}).get("token") or "").strip()
+    """International Trae (trae.ai). 基 is the included dollar pool, 奖 is bonus."""
+    info = _trae_userinfo() or {}
+    token = str(info.get("token") or "").strip()
     if not token:
         return _row("TRAE", tag_5h="基", tag_week="奖")
-    host = str((info or {}).get("host") or "https://growsg-normal.trae.ai").rstrip("/")
+    host = _trae_international_host(info)
     async with httpx.AsyncClient(timeout=12.0) as client:
         resp = await client.post(
             f"{host}/trae/api/v1/pay/ide_user_ent_usage",
