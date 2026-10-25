@@ -12,14 +12,19 @@ two bars are first-party Auto (`autoPercentUsed`) and third-party API
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import shutil
 import sqlite3
+import subprocess
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+
+from .ide_quota import chrome_safe_decrypt, trae_userinfo_decrypt
 
 logger = logging.getLogger("usage")
 
@@ -28,6 +33,9 @@ logger = logging.getLogger("usage")
 # mounts them there), keys come from the hub's secret store.
 CURSOR_DB = Path("/nonexistent/cursor-state.vscdb")
 AMR_CONFIG = Path("/nonexistent/amr-config.json")
+TRAE_STORAGE = Path("/nonexistent/trae-storage.json")
+QODER_AUTH = Path("/nonexistent/qoder-auth.v1.dat")
+QODER_SAFE_KEY = Path("/nonexistent/qoder-safe-storage")
 OPENCODE_AUTH = Path("/nonexistent/opencode-auth.json")
 OPENCODE_CONFIG = Path("/nonexistent/opencode.json")
 AGY_ACCOUNTS = Path("/nonexistent/agy-accounts.json")
@@ -41,10 +49,14 @@ KEYS: dict[str, str] = {}
 
 def configure(secrets_dir: Path, cache_dir: Path, keys: dict[str, str]) -> None:
     """secrets_dir: mounted credential files; cache_dir: writable; keys: hub secrets."""
-    global CURSOR_DB, AMR_CONFIG, OPENCODE_AUTH, OPENCODE_CONFIG, AGY_ACCOUNTS, DEVIN_DB, DEVIN_CREDENTIALS
+    global CURSOR_DB, AMR_CONFIG, TRAE_STORAGE, QODER_AUTH, QODER_SAFE_KEY
+    global OPENCODE_AUTH, OPENCODE_CONFIG, AGY_ACCOUNTS, DEVIN_DB, DEVIN_CREDENTIALS
     global AGY_USAGE_JSON, AGY_CLIENT_ID, AGY_CLIENT_SECRET
     CURSOR_DB = secrets_dir / "cursor-state.vscdb"
     AMR_CONFIG = secrets_dir / "amr-config.json"
+    TRAE_STORAGE = secrets_dir / "trae-storage.json"
+    QODER_AUTH = secrets_dir / "qoder-auth.v1.dat"
+    QODER_SAFE_KEY = secrets_dir / "qoder-safe-storage"
     OPENCODE_AUTH = secrets_dir / "opencode-auth.json"
     OPENCODE_CONFIG = secrets_dir / "opencode.json"
     AGY_ACCOUNTS = secrets_dir / "agy-accounts.json"
@@ -88,12 +100,157 @@ def _row(
     }
 
 
+def _used_percent(used: object, limit: object) -> float | None:
+    if isinstance(used, bool) or isinstance(limit, bool):
+        return None
+    if not isinstance(used, (int, float)) or not isinstance(limit, (int, float)):
+        return None
+    if limit <= 0:
+        return None
+    return 100.0 * float(used) / float(limit)
+
+
+def _fraction_percent(value: object) -> float | None:
+    """Qoder reports 0.73 for 73 percent. Values already on a 0–100 scale pass through."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number <= 1.5:
+        number *= 100.0
+    return number
+
+
+def _qoder_password() -> str:
+    if QODER_SAFE_KEY.exists():
+        try:
+            text = QODER_SAFE_KEY.read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        if text:
+            return text
+    security = shutil.which("security")
+    if not security:
+        return ""
+    try:
+        result = subprocess.run(
+            [security, "find-generic-password", "-s", "Qoder CN App Safe Storage", "-w"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+async def _qoder() -> dict:
+    """Qoder CN plan credits. 套 is the plan pool, 总 is every pool together."""
+    password = _qoder_password()
+    if not password or not QODER_AUTH.exists():
+        return _row("QODER", tag_5h="套", tag_week="总")
+    try:
+        auth = json.loads(chrome_safe_decrypt(QODER_AUTH.read_bytes(), password))
+    except (OSError, ValueError, json.JSONDecodeError):
+        logger.warning("qoder auth unreadable")
+        return _row("QODER", tag_5h="套", tag_week="总")
+    token = str(auth.get("token") or "").strip() if isinstance(auth, dict) else ""
+    if not token:
+        return _row("QODER", tag_5h="套", tag_week="总")
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        resp = await client.get(
+            "https://openapi.qoder.com.cn/api/v2/quota/usage",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        )
+    if resp.status_code != 200:
+        logger.warning("qoder quota %s", resp.status_code)
+        return _row("QODER", tag_5h="套", tag_week="总")
+    data = resp.json() if resp.content else {}
+    if not isinstance(data, dict):
+        return _row("QODER", tag_5h="套", tag_week="总")
+    plan = data.get("userQuota") if isinstance(data.get("userQuota"), dict) else {}
+    return _row(
+        "QODER",
+        pct_5h=_used_percent(plan.get("used"), plan.get("total")),
+        pct_week=_fraction_percent(data.get("totalUsagePercentage")),
+        tag_5h="套",
+        tag_week="总",
+    )
+
+
+def _trae_userinfo() -> dict | None:
+    if not TRAE_STORAGE.exists():
+        return None
+    try:
+        stored = json.loads(TRAE_STORAGE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("trae storage unreadable")
+        return None
+    raw = stored.get("iCubeAuthInfo://icube.cloudide") if isinstance(stored, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        blob = base64.b64decode(raw + "=" * ((4 - len(raw) % 4) % 4))
+        info = json.loads(trae_userinfo_decrypt(blob))
+    except (ValueError, json.JSONDecodeError):
+        logger.warning("trae auth unreadable")
+        return None
+    return info if isinstance(info, dict) else None
+
+
+async def _trae() -> dict:
+    """Trae Pro dollar pool. 基 is included usage, 奖 is the bonus pool."""
+    info = _trae_userinfo()
+    token = str((info or {}).get("token") or "").strip()
+    if not token:
+        return _row("TRAE", tag_5h="基", tag_week="奖")
+    host = str((info or {}).get("host") or "https://growsg-normal.trae.ai").rstrip("/")
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        resp = await client.post(
+            f"{host}/trae/api/v1/pay/ide_user_ent_usage",
+            headers={"Authorization": f"Cloud-IDE-JWT {token}", "Accept": "application/json"},
+            json={"require_usage": True},
+        )
+    if resp.status_code != 200:
+        logger.warning("trae usage %s", resp.status_code)
+        return _row("TRAE", tag_5h="基", tag_week="奖")
+    data = resp.json() if resp.content else {}
+    packs = data.get("user_entitlement_pack_list") if isinstance(data, dict) else None
+    chosen = None
+    for pack in packs or []:
+        if isinstance(pack, dict) and pack.get("status") == 1 and not pack.get("is_hide"):
+            chosen = pack
+            break
+    if not isinstance(chosen, dict):
+        return _row("TRAE", tag_5h="基", tag_week="奖")
+    base = chosen.get("entitlement_base_info") if isinstance(chosen.get("entitlement_base_info"), dict) else {}
+    quota = base.get("quota") if isinstance(base.get("quota"), dict) else {}
+    usage = chosen.get("usage") if isinstance(chosen.get("usage"), dict) else {}
+    return _row(
+        "TRAE",
+        pct_5h=_used_percent(usage.get("basic_usage_amount"), quota.get("basic_usage_limit")),
+        pct_week=_used_percent(usage.get("bonus_usage_amount"), quota.get("bonus_usage_limit")),
+        tag_5h="基",
+        tag_week="奖",
+    )
+
+
 async def fetch_all() -> list[dict]:
-    cursor = design = ocgo = agy = devin = None
+    cursor = trae = qoder = design = ocgo = agy = devin = None
     try:
         cursor = await _cursor()
     except Exception:
         logger.exception("cursor usage")
+    try:
+        trae = await _trae()
+    except Exception:
+        logger.exception("trae usage")
+    try:
+        qoder = await _qoder()
+    except Exception:
+        logger.exception("qoder usage")
     try:
         design = await _opendesign()
     except Exception:
@@ -112,6 +269,8 @@ async def fetch_all() -> list[dict]:
         logger.exception("devin usage")
     return [
         cursor or _row("CURSOR"),
+        trae or _row("TRAE", tag_5h="基", tag_week="奖"),
+        qoder or _row("QODER", tag_5h="套", tag_week="总"),
         design or _row("DESIGN"),
         ocgo or _row("OC.GO"),
         agy or _row("AGY"),

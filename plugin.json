@@ -1,15 +1,15 @@
 {
   "id": "usage",
   "kind": "source",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "hub_api": 1,
   "name": {
     "zh": "AI 用量",
     "en": "AI usage"
   },
   "description": {
-    "zh": "Cursor / Open Design / OpenCode Go / Antigravity / Devin 的已用百分比；凭证文件挂到插件数据目录，API key 放 hub 密钥库",
-    "en": "Percent used across Cursor, Open Design, OpenCode Go, Antigravity and Devin"
+    "zh": "Cursor、Trae、Qoder、Open Design、OpenCode Go、AGY、Devin 的已用百分比",
+    "en": "Percent used for Cursor, Trae, Qoder, Open Design, OpenCode Go, AGY and Devin"
   },
   "author": "neatstudio",
   "homepage": "https://github.com/neatstudio/glance-plugin-usage",
@@ -40,7 +40,15 @@
         "items": {
           "type": "string"
         },
-        "default": ["CURSOR", "DESIGN", "OC.GO", "AGY", "DEVIN"],
+        "default": [
+          "CURSOR",
+          "TRAE",
+          "QODER",
+          "DESIGN",
+          "OC.GO",
+          "AGY",
+          "DEVIN"
+        ],
         "title": "显示哪些（按顺序）"
       }
     }
@@ -70,6 +78,26 @@
           "names": {
             "type": "list"
           }
+        },
+        "stale_after_s": 1800
+      },
+      {
+        "id": "trae",
+        "name": { "zh": "Trae" },
+        "fields": {
+          "pct_5h": { "type": "number", "unit": "%" },
+          "pct_week": { "type": "number", "unit": "%" },
+          "line": { "type": "text" }
+        },
+        "stale_after_s": 1800
+      },
+      {
+        "id": "qoder",
+        "name": { "zh": "Qoder" },
+        "fields": {
+          "pct_5h": { "type": "number", "unit": "%" },
+          "pct_week": { "type": "number", "unit": "%" },
+          "line": { "type": "text" }
         },
         "stale_after_s": 1800
       },

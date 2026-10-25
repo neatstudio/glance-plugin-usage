@@ -1,11 +1,12 @@
 # glance-plugin-usage
 
-Percent used across AI tools — Cursor, Open Design, OpenCode Go, Antigravity,
-Devin — for the [glance](https://github.com/neatstudio/glance) hub.
+Percent used across AI tools — Cursor, Trae, Qoder CN, Open Design, OpenCode Go,
+Antigravity, Devin — for the [glance](https://github.com/neatstudio/glance) hub.
 
 Entities: `usage.rows` (table + `lines` + `names`) and one per tool
-(`usage.cursor`, `usage.opendesign`, `usage.ocgo`, `usage.agy`, `usage.devin`)
-with `pct_5h`, `pct_week`, `line`. The Open Design row is named `DESIGN`.
+(`usage.cursor`, `usage.trae`, `usage.qoder`, `usage.opendesign`, `usage.ocgo`,
+`usage.agy`, `usage.devin`) with `pct_5h`, `pct_week`, `line`.
+Row names are `TRAE`, `QODER`, and `DESIGN`.
 
 ## Credentials
 
@@ -19,6 +20,8 @@ Nothing is read from the environment. Two kinds of input:
    | --------------------------------------------- | ----------------------------------------------------------------------- |
    | `cursor-state.vscdb`                          | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`   |
    | `amr-config.json`                             | `~/.amr/config.json` (Open Design control key; read-only)               |
+   | `trae-storage.json`                           | Trae `User/globalStorage/storage.json`                                  |
+   | `qoder-auth.v1.dat`, `qoder-safe-storage`     | Qoder CN IDE auth blob and its safeStorage password                     |
    | `opencode-auth.json`, `opencode.json`         | `~/.local/share/opencode/auth.json`, `~/.config/opencode/opencode.json` |
    | `agy-accounts.json`                           | `~/.config/opencode/antigravity-accounts.json`                          |
    | `devin-state.vscdb`, `devin-credentials.toml` | Devin app state and `~/.local/share/devin/credentials.toml`             |
