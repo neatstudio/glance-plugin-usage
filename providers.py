@@ -523,7 +523,7 @@ def _opencode_keys() -> list[str]:
 def _bucket_pct(bucket: dict | None) -> float | None:
     if not isinstance(bucket, dict):
         return None
-    if bucket.get("status") not in (None, "ok"):
+    if bucket.get("status") not in (None, "ok", "rate-limited"):
         return None
     value = bucket.get("percent")
     if isinstance(value, (int, float)):
