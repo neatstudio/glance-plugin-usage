@@ -38,6 +38,7 @@ QODER_AUTH = Path("/nonexistent/qoder-auth.v1.dat")
 QODER_SAFE_KEY = Path("/nonexistent/qoder-safe-storage")
 OPENCODE_AUTH = Path("/nonexistent/opencode-auth.json")
 OPENCODE_CONFIG = Path("/nonexistent/opencode.json")
+OPENCODE_DB = Path("/nonexistent/opencode.db")
 AGY_ACCOUNTS = Path("/nonexistent/agy-accounts.json")
 DEVIN_DB = Path("/nonexistent/devin-state.vscdb")
 DEVIN_CREDENTIALS = Path("/nonexistent/devin-credentials.toml")
@@ -50,7 +51,7 @@ KEYS: dict[str, str] = {}
 def configure(secrets_dir: Path, cache_dir: Path, keys: dict[str, str]) -> None:
     """secrets_dir: mounted credential files; cache_dir: writable; keys: hub secrets."""
     global CURSOR_DB, AMR_CONFIG, TRAE_STORAGE, QODER_AUTH, QODER_SAFE_KEY
-    global OPENCODE_AUTH, OPENCODE_CONFIG, AGY_ACCOUNTS, DEVIN_DB, DEVIN_CREDENTIALS
+    global OPENCODE_AUTH, OPENCODE_CONFIG, OPENCODE_DB, AGY_ACCOUNTS, DEVIN_DB, DEVIN_CREDENTIALS
     global AGY_USAGE_JSON, AGY_CLIENT_ID, AGY_CLIENT_SECRET
     CURSOR_DB = secrets_dir / "cursor-state.vscdb"
     AMR_CONFIG = secrets_dir / "amr-config.json"
@@ -59,6 +60,7 @@ def configure(secrets_dir: Path, cache_dir: Path, keys: dict[str, str]) -> None:
     QODER_SAFE_KEY = secrets_dir / "qoder-safe-storage"
     OPENCODE_AUTH = secrets_dir / "opencode-auth.json"
     OPENCODE_CONFIG = secrets_dir / "opencode.json"
+    OPENCODE_DB = secrets_dir / "opencode-share" / "opencode.db"
     AGY_ACCOUNTS = secrets_dir / "agy-accounts.json"
     DEVIN_DB = secrets_dir / "devin-state.vscdb"
     DEVIN_CREDENTIALS = secrets_dir / "devin-credentials.toml"
@@ -484,6 +486,25 @@ def _opencode_keys() -> list[str]:
                 entry = auth.get(name)
                 if isinstance(entry, dict):
                     add(entry.get("key"))
+    if OPENCODE_DB.exists():
+        try:
+            con = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=5)
+            try:
+                rows = con.execute(
+                    "SELECT value FROM credential WHERE label = 'OpenCode Go' AND ifnull(active, 1) = 1"
+                ).fetchall()
+            finally:
+                con.close()
+        except sqlite3.Error:
+            logger.warning("opencode db unreadable")
+            rows = []
+        for (raw,) in rows:
+            try:
+                entry = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(entry, dict):
+                add(entry.get("key"))
     if OPENCODE_CONFIG.exists():
         try:
             cfg = json.loads(OPENCODE_CONFIG.read_text(encoding="utf-8"))
@@ -553,6 +574,9 @@ async def _opencode_go() -> dict:
                 usage = (data.get("usage") or data) if isinstance(data, dict) else {}
                 five = _bucket_pct(usage.get("rolling") or usage.get("five_hour") or usage.get("5h"))
                 week = _bucket_pct(usage.get("weekly") or usage.get("week"))
+                month = _bucket_pct(usage.get("monthly") or usage.get("month"))
+                if month is not None and (week is None or month >= week):
+                    return _row("OC.GO", pct_5h=five, pct_week=month, tag_5h="5h", tag_week="月")
                 return _row("OC.GO", pct_5h=five, pct_week=week)
             else:
                 logger.info("opencode zen/go usage %s", getattr(resp, "status_code", None))
